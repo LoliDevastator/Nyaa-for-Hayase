@@ -1,4 +1,6 @@
 export default new class Nyaa {
+  // Użyj publicznego proxy CORS
+  proxy = 'https://api.allorigins.win/raw?url='
   base = 'https://nyaa.si/?page=rss&q='
 
   async single({ titles, episode }) {
@@ -13,8 +15,10 @@ export default new class Nyaa {
     let query = title.replace(/[^\w\s-]/g, ' ').trim()
     if (episode) query += ` ${episode.toString().padStart(2, '0')}`
 
-    const url = this.base + encodeURIComponent(query)
-    
+    // Zapytanie przez proxy
+    const url = this.proxy + encodeURIComponent(this.base + encodeURIComponent(query))
+    console.log('📡 Zapytanie przez proxy:', url)
+
     try {
       const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -27,25 +31,19 @@ export default new class Nyaa {
       if (!items.length) return []
 
       const results = []
-
       for (const item of items) {
-        // Pobieramy link do strony torrenta
-        const linkEl = item.querySelector('link')
-        const pageUrl = linkEl?.textContent?.trim()
+        const pageUrl = item.querySelector('link')?.textContent?.trim()
         if (!pageUrl) continue
 
-        // Pobieramy stronę torrenta, aby wyciągnąć magnet
-        let magnetLink = await this.fetchMagnetFromPage(pageUrl)
-        if (!magnetLink) continue // Jeśli brak magnet, pomijamy
+        // Pobierz magnet przez proxy
+        const magnetLink = await this.fetchMagnetFromPage(pageUrl)
+        if (!magnetLink) continue
 
-        // Wyciągnięcie hasha z magnet
         const hashMatch = magnetLink.match(/btih:([A-Fa-f0-9]+)/i)
-        const hash = hashMatch ? hashMatch[1] : ''
-
         results.push({
           title: item.querySelector('title')?.textContent?.trim() || 'Brak tytułu',
           link: magnetLink,
-          hash: hash,
+          hash: hashMatch ? hashMatch[1] : '',
           seeders: parseInt(item.querySelector('nyaa\\:seeders')?.textContent || '0', 10),
           leechers: parseInt(item.querySelector('nyaa\\:leechers')?.textContent || '0', 10),
           downloads: parseInt(item.querySelector('nyaa\\:downloads')?.textContent || '0', 10),
@@ -55,22 +53,20 @@ export default new class Nyaa {
           type: 'alt'
         })
       }
-
       return results
     } catch (error) {
-      console.error('Błąd wyszukiwania:', error)
+      console.error('❌ Błąd:', error)
       return []
     }
   }
 
-  // Nowa metoda do pobierania magnet ze strony torrenta
   async fetchMagnetFromPage(pageUrl) {
     try {
-      const res = await fetch(pageUrl)
+      // Użyj proxy do pobrania strony
+      const proxyUrl = this.proxy + encodeURIComponent(pageUrl)
+      const res = await fetch(proxyUrl)
       if (!res.ok) return null
       const html = await res.text()
-      
-      // Szukamy linku magnet w HTML (użyj prostego regex)
       const magnetMatch = html.match(/<a[^>]+href="(magnet:[^"]+)"/i)
       return magnetMatch ? magnetMatch[1] : null
     } catch {
@@ -80,7 +76,7 @@ export default new class Nyaa {
 
   async test() {
     try {
-      const res = await fetch(this.base + 'one%20piece')
+      const res = await fetch(this.proxy + encodeURIComponent(this.base + 'test'))
       return res.ok
     } catch {
       return false
