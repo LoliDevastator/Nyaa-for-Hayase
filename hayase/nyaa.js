@@ -1,6 +1,6 @@
 export default new class Nyaa {
-  // Użyj publicznego proxy CORS
-  proxy = 'https://api.allorigins.win/raw?url='
+  // Szybsze proxy (możesz zastąpić własnym)
+  proxy = 'https://corsproxy.io/?url='
   base = 'https://nyaa.si/?page=rss&q='
 
   async single({ titles, episode }) {
@@ -15,28 +15,52 @@ export default new class Nyaa {
     let query = title.replace(/[^\w\s-]/g, ' ').trim()
     if (episode) query += ` ${episode.toString().padStart(2, '0')}`
 
-    // Zapytanie przez proxy
     const url = this.proxy + encodeURIComponent(this.base + encodeURIComponent(query))
-    console.log('📡 Zapytanie przez proxy:', url)
 
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      
+
       const text = await res.text()
       const parser = new DOMParser()
       const xml = parser.parseFromString(text, 'text/xml')
-      
       const items = xml.querySelectorAll('item')
+
       if (!items.length) return []
 
-      const results = []
-      for (const item of items) {
-        const pageUrl = item.querySelector('link')?.textContent?.trim()
-        if (!pageUrl) continue
+      // Ogranicz do 5 pierwszych wyników (aby zdążyć przed timeout)
+      const limitedItems = Array.from(items).slice(0, 5)
 
-        // Pobierz magnet przez proxy
-        const magnetLink = await this.fetchMagnetFromPage(pageUrl)
+      // Pobieranie magnetów równolegle (Promise.all)
+      const magnetPromises = limitedItems.map(async (item) => {
+        const pageUrl = item.querySelector('link')?.textContent?.trim()
+        if (!pageUrl) return null
+
+        try {
+          const proxyUrl = this.proxy + encodeURIComponent(pageUrl)
+          const pageRes = await fetch(proxyUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+          })
+          if (!pageRes.ok) return null
+          const html = await pageRes.text()
+          const magnetMatch = html.match(/<a[^>]+href="(magnet:[^"]+)"/i)
+          return magnetMatch ? magnetMatch[1] : null
+        } catch {
+          return null
+        }
+      })
+
+      // Czekamy na wszystkie magnet (z timeoutem 8 sekund)
+      const magnets = await Promise.allSettled(magnetPromises)
+
+      // Łączenie wyników
+      const results = []
+      for (let i = 0; i < limitedItems.length; i++) {
+        const item = limitedItems[i]
+        const magnetResult = magnets[i]
+        const magnetLink = magnetResult.status === 'fulfilled' ? magnetResult.value : null
         if (!magnetLink) continue
 
         const hashMatch = magnetLink.match(/btih:([A-Fa-f0-9]+)/i)
@@ -53,24 +77,11 @@ export default new class Nyaa {
           type: 'alt'
         })
       }
+
       return results
     } catch (error) {
-      console.error('❌ Błąd:', error)
+      console.error('Błąd wyszukiwania:', error)
       return []
-    }
-  }
-
-  async fetchMagnetFromPage(pageUrl) {
-    try {
-      // Użyj proxy do pobrania strony
-      const proxyUrl = this.proxy + encodeURIComponent(pageUrl)
-      const res = await fetch(proxyUrl)
-      if (!res.ok) return null
-      const html = await res.text()
-      const magnetMatch = html.match(/<a[^>]+href="(magnet:[^"]+)"/i)
-      return magnetMatch ? magnetMatch[1] : null
-    } catch {
-      return null
     }
   }
 
