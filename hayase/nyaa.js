@@ -1,5 +1,4 @@
 export default new class Nyaa {
-  // URL do RSS Nyaa
   base = 'https://nyaa.si/?page=rss&q='
 
   async single({ titles, episode }) {
@@ -11,7 +10,6 @@ export default new class Nyaa {
   movie = this.single
 
   async search(title, episode) {
-    // Budowanie zapytania
     let query = title.replace(/[^\w\s-]/g, ' ').trim()
     if (episode) query += ` ${episode.toString().padStart(2, '0')}`
 
@@ -25,53 +23,34 @@ export default new class Nyaa {
       const parser = new DOMParser()
       const xml = parser.parseFromString(text, 'text/xml')
       
-      // Sprawdzenie błędów parsowania
-      const parserError = xml.querySelector('parsererror')
-      if (parserError) throw new Error('Błąd parsowania XML')
-
-      // Pobranie wszystkich elementów <item>
       const items = xml.querySelectorAll('item')
       if (!items.length) return []
 
       const results = []
 
       for (const item of items) {
-        // Pobranie podstawowych danych
-        const titleEl = item.querySelector('title')
+        // Pobieramy link do strony torrenta
         const linkEl = item.querySelector('link')
-        const pubDateEl = item.querySelector('pubDate')
-        
-        // Nyaa używa własnej przestrzeni nazw (nyaa:)
-        const seedersEl = item.querySelector('nyaa\\:seeders') || item.querySelector('seeders')
-        const leechersEl = item.querySelector('nyaa\\:leechers') || item.querySelector('leechers')
-        const downloadsEl = item.querySelector('nyaa\\:downloads') || item.querySelector('downloads')
-        const sizeEl = item.querySelector('nyaa\\:size') || item.querySelector('size')
-        const hashEl = item.querySelector('nyaa\\:infoHash') || item.querySelector('infoHash')
+        const pageUrl = linkEl?.textContent?.trim()
+        if (!pageUrl) continue
 
-        // Pobranie linku magnet (jeśli jest w <link>) lub z <nyaa:magnet>
-        let magnetLink = linkEl?.textContent?.trim() || ''
-        // Jeśli link prowadzi do strony, spróbuj znaleźć magnet w <nyaa:magnet>
-        if (!magnetLink.startsWith('magnet:')) {
-          const magnetEl = item.querySelector('nyaa\\:magnet') || item.querySelector('magnet')
-          if (magnetEl) magnetLink = magnetEl.textContent?.trim() || ''
-        }
+        // Pobieramy stronę torrenta, aby wyciągnąć magnet
+        let magnetLink = await this.fetchMagnetFromPage(pageUrl)
+        if (!magnetLink) continue // Jeśli brak magnet, pomijamy
 
-        // Jeśli nadal brak magnet, pomiń wynik
-        if (!magnetLink.startsWith('magnet:')) continue
-
-        // Wyciągnięcie hasha z magnet linku
+        // Wyciągnięcie hasha z magnet
         const hashMatch = magnetLink.match(/btih:([A-Fa-f0-9]+)/i)
         const hash = hashMatch ? hashMatch[1] : ''
 
         results.push({
-          title: titleEl?.textContent?.trim() || 'Brak tytułu',
+          title: item.querySelector('title')?.textContent?.trim() || 'Brak tytułu',
           link: magnetLink,
           hash: hash,
-          seeders: parseInt(seedersEl?.textContent || '0', 10),
-          leechers: parseInt(leechersEl?.textContent || '0', 10),
-          downloads: parseInt(downloadsEl?.textContent || '0', 10),
-          size: 0, // Nyaa podaje rozmiar w formacie np. "1.2 GiB", można to przeliczyć na bajty
-          date: new Date(pubDateEl?.textContent || Date.now()),
+          seeders: parseInt(item.querySelector('nyaa\\:seeders')?.textContent || '0', 10),
+          leechers: parseInt(item.querySelector('nyaa\\:leechers')?.textContent || '0', 10),
+          downloads: parseInt(item.querySelector('nyaa\\:downloads')?.textContent || '0', 10),
+          size: 0,
+          date: new Date(item.querySelector('pubDate')?.textContent || Date.now()),
           accuracy: 'medium',
           type: 'alt'
         })
@@ -79,8 +58,23 @@ export default new class Nyaa {
 
       return results
     } catch (error) {
-      console.error('Błąd wyszukiwania Nyaa:', error)
-      return [] // Zwróć pustą tablicę w przypadku błędu
+      console.error('Błąd wyszukiwania:', error)
+      return []
+    }
+  }
+
+  // Nowa metoda do pobierania magnet ze strony torrenta
+  async fetchMagnetFromPage(pageUrl) {
+    try {
+      const res = await fetch(pageUrl)
+      if (!res.ok) return null
+      const html = await res.text()
+      
+      // Szukamy linku magnet w HTML (użyj prostego regex)
+      const magnetMatch = html.match(/<a[^>]+href="(magnet:[^"]+)"/i)
+      return magnetMatch ? magnetMatch[1] : null
+    } catch {
+      return null
     }
   }
 
